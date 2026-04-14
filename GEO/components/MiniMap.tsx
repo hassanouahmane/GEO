@@ -17,14 +17,24 @@ const initLeaflet = async () => {
 
 export default function MiniMap() {
   const mapRef = useRef<L.Map | null>(null);
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const { pois } = useGeo();
 
   useEffect(() => {
-    if (mapRef.current) return;
+    if (mapRef.current || !mapContainerRef.current) return;
+    let isMounted = true;
 
     const setupMap = async () => {
       const L = await initLeaflet();
-      const map = L.map('mini-map', {
+      const container = mapContainerRef.current;
+      if (!container || !isMounted) return;
+
+      // Prevent Leaflet double-init during hot reloads.
+      if ((container as HTMLDivElement & { _leaflet_id?: number })._leaflet_id) {
+        return;
+      }
+
+      const map = L.map(container, {
         center: DEFAULT_CENTER,
         zoom: DEFAULT_ZOOM - 2,
         zoomControl: false,
@@ -39,10 +49,22 @@ export default function MiniMap() {
         maxZoom: 19,
       }).addTo(map);
 
-      mapRef.current = map;
+      if (isMounted) {
+        mapRef.current = map;
+      } else {
+        map.remove();
+      }
     };
 
     setupMap();
+
+    return () => {
+      isMounted = false;
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -63,34 +85,14 @@ export default function MiniMap() {
       // Add POI markers
       pois.forEach((poi) => {
         const color = CATEGORY_COLORS[poi.category];
-        const markerHtml = `
-          <div style="
-            background-color: ${color};
-            width: 20px;
-            height: 20px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-weight: bold;
-            border: 2px solid white;
-            font-size: 10px;
-          ">
-            •
-          </div>
-        `;
-
-        const icon = L.divIcon({
-          html: markerHtml,
-          className: '',
-          iconSize: [20, 20],
-          iconAnchor: [10, 10],
-        });
-
-        L.marker([poi.latitude, poi.longitude], { icon }).addTo(
-          mapRef.current!
-        );
+        L.circleMarker([poi.latitude, poi.longitude], {
+          radius: 7,
+          fillColor: color,
+          color: '#ffffff',
+          weight: 2,
+          opacity: 1,
+          fillOpacity: 0.95,
+        }).addTo(mapRef.current!);
       });
     };
 
@@ -100,7 +102,7 @@ export default function MiniMap() {
   return (
     <div className="bg-card border border-border rounded-lg p-6">
       <h2 className="text-lg font-semibold text-foreground mb-4">Vue générale</h2>
-      <div id="mini-map" className="w-full h-64 rounded-lg overflow-hidden border border-border" />
+      <div ref={mapContainerRef} id="mini-map" className="w-full h-64 rounded-lg overflow-hidden border border-border" />
     </div>
   );
 }

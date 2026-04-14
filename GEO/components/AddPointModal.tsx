@@ -39,7 +39,7 @@ export default function AddPointModal({ onClose }: AddPointModalProps) {
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!name.trim()) {
@@ -55,15 +55,19 @@ export default function AddPointModal({ onClose }: AddPointModalProps) {
       return;
     }
 
-    addPoi({
-      name: name.trim(),
-      category,
-      latitude: lat,
-      longitude: lon,
-      description: description.trim() || undefined,
-    });
+    try {
+      await addPoi({
+        name: name.trim(),
+        category,
+        latitude: lat,
+        longitude: lon,
+        description: description.trim() || undefined,
+      });
 
-    onClose();
+      onClose();
+    } catch {
+      alert("Erreur lors de l'enregistrement du point en base");
+    }
   };
 
   return (

@@ -2,7 +2,13 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useGeo } from '@/app/context/GeoContext';
-import { CATEGORY_COLORS, DEFAULT_CENTER, DEFAULT_ZOOM } from '@/lib/constants';
+import {
+  CATEGORY_COLORS,
+  CATEGORY_EMOJIS,
+  CATEGORY_LABELS,
+  DEFAULT_CENTER,
+  DEFAULT_ZOOM,
+} from '@/lib/constants';
 import { getCurrentPosition } from '@/lib/geo';
 import MapPopup from './MapPopup';
 import type * as L from 'leaflet';
@@ -19,7 +25,8 @@ const initLeaflet = async () => {
 
 export default function Map() {
   const mapRef = useRef<L.Map | null>(null);
-  const markersRef = useRef<Record<string, L.Marker>>({});
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
+  const markersRef = useRef<Record<string, L.CircleMarker>>({});
   const userMarkerRef = useRef<L.CircleMarker | null>(null);
   const { pois, selectedPoiId, selectPoi, userLocation, setUserLocation } =
     useGeo();
@@ -27,11 +34,20 @@ export default function Map() {
 
   // Initialize map
   useEffect(() => {
-    if (mapRef.current) return;
+    if (mapRef.current || !mapContainerRef.current) return;
+    let isMounted = true;
 
     const setupMap = async () => {
       const L = await initLeaflet();
-      const map = L.map('map', {
+      const container = mapContainerRef.current;
+      if (!container || !isMounted) return;
+
+      // Prevent Leaflet double-init during hot reloads.
+      if ((container as HTMLDivElement & { _leaflet_id?: number })._leaflet_id) {
+        return;
+      }
+
+      const map = L.map(container, {
         center: DEFAULT_CENTER,
         zoom: DEFAULT_ZOOM,
         zoomControl: true,
@@ -42,10 +58,22 @@ export default function Map() {
         maxZoom: 19,
       }).addTo(map);
 
-      mapRef.current = map;
+      if (isMounted) {
+        mapRef.current = map;
+      } else {
+        map.remove();
+      }
     };
 
     setupMap();
+
+    return () => {
+      isMounted = false;
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+      }
+    };
   }, []);
 
   // Fonction manuelle pour obtenir la position
@@ -148,37 +176,16 @@ export default function Map() {
       // Add new markers
       pois.forEach((poi) => {
         const color = CATEGORY_COLORS[poi.category];
-        const markerHtml = `
-          <div style="
-            background-color: ${color};
-            width: 32px;
-            height: 32px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-weight: bold;
-            border: 3px solid white;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-            cursor: pointer;
-          ">
-            •
-          </div>
-        `;
-
-        const icon = L.divIcon({
-          html: markerHtml,
-          className: '',
-          iconSize: [32, 32],
-          iconAnchor: [16, 16],
-          popupAnchor: [0, -16],
-        });
-
-        const marker = L.marker([poi.latitude, poi.longitude], {
-          icon,
+        const marker = L.circleMarker([poi.latitude, poi.longitude], {
+          radius: selectedPoiId === poi.id ? 12 : 10,
+          fillColor: color,
+          color: '#ffffff',
+          weight: 3,
+          opacity: 1,
+          fillOpacity: 0.95,
         })
           .on('click', () => selectPoi(selectedPoiId === poi.id ? null : poi.id))
+          .bindTooltip(`${CATEGORY_EMOJIS[poi.category]} ${CATEGORY_LABELS[poi.category]} - ${poi.name}`)
           .addTo(mapRef.current!);
 
         markersRef.current[poi.id] = marker;
@@ -203,7 +210,7 @@ export default function Map() {
 
   return (
     <div className="relative w-full h-screen">
-      <div id="map" className="w-full h-full" />
+      <div ref={mapContainerRef} id="map" className="w-full h-full" />
       
       {/* Bouton flottant pour la géolocalisation */}
       <button
@@ -221,6 +228,22 @@ export default function Map() {
           {isLocating ? 'Localisation...' : 'Ma position'}
         </span>
       </button>
+
+      <div className="absolute top-4 right-4 z-[1000] rounded-lg bg-card/90 border border-border p-3 shadow-md">
+        <p className="text-xs font-semibold mb-2 text-foreground">Categories</p>
+        <div className="space-y-1">
+          {(['restaurant', 'hotel', 'site', 'leisure'] as const).map((category) => (
+            <div key={category} className="flex items-center gap-2 text-xs">
+              <span
+                className="inline-block h-3 w-3 rounded-full border border-white"
+                style={{ backgroundColor: CATEGORY_COLORS[category] }}
+              />
+              <span>{CATEGORY_EMOJIS[category]}</span>
+              <span className="text-foreground">{CATEGORY_LABELS[category]}</span>
+            </div>
+          ))}
+        </div>
+      </div>
       
       {selectedPoiId && (
         <MapPopup poiId={selectedPoiId} onClose={() => selectPoi(null)} />

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { POI, INITIAL_POIS, Category } from '@/lib/constants';
 
 interface UserLocation {
@@ -14,8 +14,9 @@ interface GeoContextType {
   selectedPoiId: string | null;
   activeFilters: Category[];
   searchQuery: string;
-  addPoi: (poi: Omit<POI, 'id' | 'createdAt'>) => void;
-  deletePoi: (id: string) => void;
+  addPoi: (poi: Omit<POI, 'id' | 'createdAt'>) => Promise<void>;
+  updatePoi: (id: string, poi: Omit<POI, 'id' | 'createdAt'>) => Promise<void>;
+  deletePoi: (id: string) => Promise<void>;
   selectPoi: (id: string | null) => void;
   setUserLocation: (location: UserLocation | null) => void;
   setActiveFilters: (filters: Category[]) => void;
@@ -32,20 +33,107 @@ export function GeoProvider({ children }: { children: React.ReactNode }) {
   const [activeFilters, setActiveFilters] = useState<Category[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
 
+  useEffect(() => {
+    const loadPois = async () => {
+      try {
+        const response = await fetch('/api/pois');
+        if (!response.ok) {
+          throw new Error('Failed to fetch POIs');
+        }
+
+        const data: POI[] = await response.json();
+        setPois(
+          data.map((poi) => ({
+            ...poi,
+            createdAt: new Date(poi.createdAt),
+          }))
+        );
+      } catch (error) {
+        console.error('[GeoContext] Failed to load POIs:', error);
+      }
+    };
+
+    loadPois();
+  }, []);
+
   const addPoi = useCallback(
-    (newPoi: Omit<POI, 'id' | 'createdAt'>) => {
-      const poi: POI = {
-        ...newPoi,
-        id: Date.now().toString(),
-        createdAt: new Date(),
-      };
-      setPois((prev) => [poi, ...prev]);
+    async (newPoi: Omit<POI, 'id' | 'createdAt'>) => {
+      try {
+        const response = await fetch('/api/pois', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(newPoi),
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to create POI');
+        }
+
+        const createdPoi: POI = await response.json();
+        setPois((prev) => [
+          {
+            ...createdPoi,
+            createdAt: new Date(createdPoi.createdAt),
+          },
+          ...prev,
+        ]);
+      } catch (error) {
+        console.error('[GeoContext] Failed to create POI:', error);
+        throw error;
+      }
     },
     []
   );
 
-  const deletePoi = useCallback((id: string) => {
-    setPois((prev) => prev.filter((poi) => poi.id !== id));
+  const updatePoi = useCallback(async (id: string, updatedPoi: Omit<POI, 'id' | 'createdAt'>) => {
+    try {
+      const response = await fetch(`/api/pois/${id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(updatedPoi),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to update POI');
+      }
+
+      const poiFromDb: POI = await response.json();
+      setPois((prev) =>
+        prev.map((poi) =>
+          poi.id === id
+            ? {
+                ...poiFromDb,
+                createdAt: new Date(poiFromDb.createdAt),
+              }
+            : poi
+        )
+      );
+    } catch (error) {
+      console.error('[GeoContext] Failed to update POI:', error);
+      throw error;
+    }
+  }, []);
+
+  const deletePoi = useCallback(async (id: string) => {
+    try {
+      const response = await fetch(`/api/pois/${id}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to delete POI');
+      }
+
+      setPois((prev) => prev.filter((poi) => poi.id !== id));
+      setSelectedPoiId((prev) => (prev === id ? null : prev));
+    } catch (error) {
+      console.error('[GeoContext] Failed to delete POI:', error);
+      throw error;
+    }
   }, []);
 
   const selectPoi = useCallback((id: string | null) => {
@@ -81,6 +169,7 @@ export function GeoProvider({ children }: { children: React.ReactNode }) {
     activeFilters,
     searchQuery,
     addPoi,
+    updatePoi,
     deletePoi,
     selectPoi,
     setUserLocation,
