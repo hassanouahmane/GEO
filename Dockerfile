@@ -16,7 +16,7 @@ COPY . .
 RUN npm run prisma:generate
 RUN npm run build
 # Create the SQLite schema during image build so Cloud Run startup stays fast and reliable.
-RUN DATABASE_URL=file:./dev.db npx prisma db push --skip-generate
+RUN DATABASE_URL=file:./dev.db npx prisma db push
 RUN npm prune --omit=dev
 
 FROM node:20-bookworm-slim AS runner
