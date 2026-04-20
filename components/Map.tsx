@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { GoogleMap, InfoWindowF, MarkerF, useJsApiLoader } from '@react-google-maps/api';
 import { useGeo } from '@/app/context/GeoContext';
 import {
   CATEGORY_COLORS,
@@ -11,45 +10,77 @@ import {
 } from '@/lib/constants';
 import { getCurrentPosition } from '@/lib/geo';
 import MapPopup from './MapPopup';
+import type * as L from 'leaflet';
 
-const mapContainerStyle = {
-  width: '100%',
-  height: '100%',
+let leafletModule: typeof import('leaflet');
+
+const initLeaflet = async () => {
+  if (!leafletModule) {
+    leafletModule = await import('leaflet');
+    await import('leaflet/dist/leaflet.css');
+  }
+  return leafletModule;
 };
 
 export default function Map() {
-  const mapRef = useRef<google.maps.Map | null>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const mapContainerRef = useRef<HTMLDivElement | null>(null);
+  const markersLayerRef = useRef<L.LayerGroup | null>(null);
   const { pois, selectedPoiId, selectPoi, userLocation, setUserLocation } =
     useGeo();
   const [isLocating, setIsLocating] = useState(false);
-  const [googleMapsApiKey, setGoogleMapsApiKey] = useState<string | null>(null);
 
   const selectedPoi = useMemo(
     () => pois.find((poi) => poi.id === selectedPoiId) ?? null,
     [pois, selectedPoiId]
   );
 
-  const { isLoaded, loadError } = useJsApiLoader({
-    id: 'google-map-script',
-    googleMapsApiKey,
-  });
+  useEffect(() => {
+    if (mapRef.current || !mapContainerRef.current) return;
 
-  const mapCenter = useMemo(
-    () => ({
-      lat: userLocation?.latitude ?? DEFAULT_CENTER[0],
-      lng: userLocation?.longitude ?? DEFAULT_CENTER[1],
-    }),
-    [userLocation]
-  );
+    let isMounted = true;
 
-  const buildMarkerIcon = (color: string, selected: boolean): google.maps.Symbol => ({
-    path: window.google.maps.SymbolPath.CIRCLE,
-    fillColor: color,
-    fillOpacity: 0.95,
-    strokeColor: '#ffffff',
-    strokeWeight: 2,
-    scale: selected ? 9 : 7,
-  });
+    const setupMap = async () => {
+      const L = await initLeaflet();
+      const container = mapContainerRef.current;
+      if (!container || !isMounted) return;
+
+      if ((container as HTMLDivElement & { _leaflet_id?: number })._leaflet_id) {
+        return;
+      }
+
+      const map = L.map(container, {
+        center: DEFAULT_CENTER,
+        zoom: DEFAULT_ZOOM,
+        zoomControl: true,
+      });
+
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap',
+        maxZoom: 19,
+      }).addTo(map);
+
+      const markersLayer = L.layerGroup().addTo(map);
+
+      if (isMounted) {
+        mapRef.current = map;
+        markersLayerRef.current = markersLayer;
+      } else {
+        map.remove();
+      }
+    };
+
+    setupMap();
+
+    return () => {
+      isMounted = false;
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+      }
+      markersLayerRef.current = null;
+    };
+  }, []);
 
   // Fonction manuelle pour obtenir la position
   const handleManualLocate = async () => {
@@ -65,7 +96,7 @@ export default function Map() {
       });
 
       if (mapRef.current) {
-        mapRef.current.panTo({ lat: coords.latitude, lng: coords.longitude });
+        mapRef.current.panTo([coords.latitude, coords.longitude]);
         mapRef.current.setZoom(15);
       }
     } catch (error) {
@@ -89,124 +120,70 @@ export default function Map() {
   };
 
   useEffect(() => {
-    if (!mapRef.current || !selectedPoi) return;
-    mapRef.current.panTo({ lat: selectedPoi.latitude, lng: selectedPoi.longitude });
-    mapRef.current.setZoom(DEFAULT_ZOOM);
-  }, [selectedPoi]);
+    if (!mapRef.current || !markersLayerRef.current) return;
 
-  useEffect(() => {
     let isMounted = true;
 
-    const loadMapsConfig = async () => {
-      try {
-        const response = await fetch('/api/config', { cache: 'no-store' });
-        const data = (await response.json()) as { googleMapsApiKey?: string };
+    const renderMarkers = async () => {
+      const L = await initLeaflet();
+      if (!isMounted || !mapRef.current || !markersLayerRef.current) return;
 
-        if (isMounted) {
-          setGoogleMapsApiKey(data.googleMapsApiKey?.trim() || '');
-        }
-      } catch {
-        if (isMounted) {
-          setGoogleMapsApiKey('');
-        }
+      markersLayerRef.current.clearLayers();
+
+      pois.forEach((poi) => {
+        const isSelected = selectedPoiId === poi.id;
+        const marker = L.circleMarker([poi.latitude, poi.longitude], {
+          radius: isSelected ? 9 : 7,
+          fillColor: CATEGORY_COLORS[poi.category],
+          color: '#ffffff',
+          weight: 2,
+          opacity: 1,
+          fillOpacity: 0.95,
+        });
+
+        marker.bindTooltip(`${CATEGORY_LABELS[poi.category]} - ${poi.name}`, {
+          direction: 'top',
+          offset: [0, -8],
+        });
+
+        marker.on('click', () => {
+          selectPoi(isSelected ? null : poi.id);
+        });
+
+        marker.addTo(markersLayerRef.current!);
+      });
+
+      if (userLocation) {
+        L.circleMarker([userLocation.latitude, userLocation.longitude], {
+          radius: 8,
+          fillColor: '#2e86c1',
+          color: '#ffffff',
+          weight: 2,
+          opacity: 1,
+          fillOpacity: 0.95,
+        })
+          .bindTooltip('Votre position', { direction: 'top', offset: [0, -8] })
+          .addTo(markersLayerRef.current);
       }
     };
 
-    loadMapsConfig();
+    renderMarkers();
 
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [pois, selectedPoiId, userLocation, selectPoi]);
 
-  if (googleMapsApiKey === null) {
-    return (
-      <div className="relative w-full h-screen">
-        <div className="flex h-full items-center justify-center bg-muted px-4 text-center text-sm text-muted-foreground">
-          Chargement de la configuration Google Maps...
-        </div>
-      </div>
-    );
-  }
-
-  if (!googleMapsApiKey) {
-    return (
-      <div className="relative w-full h-screen">
-        <div className="flex h-full items-center justify-center bg-muted px-4 text-center text-sm text-muted-foreground">
-          La cle API Google Maps est absente. Ajoutez NEXT_PUBLIC_GOOGLE_MAPS_API dans .env puis redemarrez le serveur.
-        </div>
-      </div>
-    );
-  }
-
-  if (loadError) {
-    return (
-      <div className="relative w-full h-screen">
-        <div className="flex h-full items-center justify-center bg-muted px-4 text-center text-sm text-destructive">
-          Impossible de charger Google Maps. Verifiez votre cle API et les restrictions de domaine.
-        </div>
-      </div>
-    );
-  }
+  useEffect(() => {
+    if (!mapRef.current || !selectedPoi) return;
+    mapRef.current.panTo([selectedPoi.latitude, selectedPoi.longitude]);
+    mapRef.current.setZoom(DEFAULT_ZOOM);
+  }, [selectedPoi]);
 
   return (
     <div className="relative w-full h-screen">
-      {isLoaded ? (
-        <GoogleMap
-          mapContainerStyle={mapContainerStyle}
-          center={mapCenter}
-          zoom={DEFAULT_ZOOM}
-          onLoad={(map) => {
-            mapRef.current = map;
-          }}
-          onUnmount={() => {
-            mapRef.current = null;
-          }}
-          options={{
-            streetViewControl: false,
-            mapTypeControl: false,
-            fullscreenControl: false,
-          }}
-        >
-          {pois.map((poi) => {
-            const isSelected = selectedPoiId === poi.id;
-            return (
-              <MarkerF
-                key={poi.id}
-                position={{ lat: poi.latitude, lng: poi.longitude }}
-                title={`${CATEGORY_LABELS[poi.category]} - ${poi.name}`}
-                icon={buildMarkerIcon(CATEGORY_COLORS[poi.category], isSelected)}
-                onClick={() => selectPoi(isSelected ? null : poi.id)}
-              />
-            );
-          })}
+      <div ref={mapContainerRef} className="h-full w-full" />
 
-          {userLocation && (
-            <MarkerF
-              position={{ lat: userLocation.latitude, lng: userLocation.longitude }}
-              title="Votre position"
-              icon={buildMarkerIcon('#2e86c1', true)}
-            />
-          )}
-
-          {selectedPoi && (
-            <InfoWindowF
-              position={{ lat: selectedPoi.latitude, lng: selectedPoi.longitude }}
-              onCloseClick={() => selectPoi(null)}
-            >
-              <div className="text-sm text-black">
-                <p className="font-semibold">{selectedPoi.name}</p>
-                <p className="text-xs">{CATEGORY_LABELS[selectedPoi.category]}</p>
-              </div>
-            </InfoWindowF>
-          )}
-        </GoogleMap>
-      ) : (
-        <div className="flex h-full items-center justify-center bg-muted text-sm text-muted-foreground">
-          Chargement de Google Maps...
-        </div>
-      )}
-      
       {/* Bouton flottant pour la géolocalisation */}
       <button
         onClick={handleManualLocate}

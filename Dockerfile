@@ -37,4 +37,4 @@ COPY --from=builder /app/prisma ./prisma
 USER node
 EXPOSE 8080
 
-CMD ["sh", "-c", "npm run start -- -H 0.0.0.0 -p ${PORT:-8080}"]
+CMD ["sh", "-c", "npx prisma db push --skip-generate && npm run start -- -H 0.0.0.0 -p ${PORT:-8080}"]
